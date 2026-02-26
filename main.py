@@ -1,171 +1,103 @@
 import requests
 import time
 import json
-import os
+import hashlib
 from datetime import datetime
 import google.generativeai as genai
 
-# ================= CONFIGURATION =================
+# ================= CONFIG =================
 TELEGRAM_BOT_TOKEN = "8584526957:AAHx9BPSotN0yS7MdewRTF3kxSAe9i2ZDvc"
-CHANNEL_ID = "@akethioai" 
-GEMINI_API_KEY = "AIzaSyCgDz4Pq-J6JbfbhpnbBlU2ecbVYtW3YSI"
+CHANNEL_USERNAME = "@akethioai"  # change if needed
+GEMINI_API_KEY = "AIzaSyDhhSUlI7bnDjSOUzASj6K9kM9SyifQPx4"
 
-# Time to wait between posts (8 Hours = 28800 seconds)
-POST_INTERVAL = 8 * 60 * 60 
+POST_INTERVAL = 8 * 60 * 60  # 8 hours (3 posts/day)
 
-# Files to store data
-MEMORY_FILE = "akethio_memory.json"
-STATE_FILE = "akethio_state.json"
+MEMORY_FILE = "akethioai_memory.json"
 
-# Topic Rotation List - Optimized for AKethioAI
-TOPICS = [
-    "AI EDUCATION 🧠 (Tutorial on how to use a specific tool like ChatGPT, Midjourney, or Claude)",
-    "AI PRODUCTIVITY 💰 (How to use AI to save time or make money in business/work)",
-    "AI NEWS 📰 (The latest global AI news translated and explained for Ethiopians)"
-]
-
-# ================= SETUP =================
+# ================= GEMINI SETUP =================
 genai.configure(api_key=GEMINI_API_KEY)
-# Using the latest Gemini 3 Flash preview for superior reasoning and speed
-model = genai.GenerativeModel("gemini-3-flash-preview") 
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-# ================= DATA MANAGEMENT =================
-
-def load_json(filename, default_value):
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return default_value
-    return default_value
-
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def get_next_topic_index():
-    state = load_json(STATE_FILE, {"topic_index": 0})
-    return state["topic_index"]
-
-def advance_topic_index():
-    state = load_json(STATE_FILE, {"topic_index": 0})
-    state["topic_index"] = (state["topic_index"] + 1) % len(TOPICS)
-    save_json(STATE_FILE, state)
-
-def record_post_history(post_content):
-    history = load_json(MEMORY_FILE, [])
-    history.append({
-        "timestamp": str(datetime.now()),
-        "snippet": post_content[:200] # Increased snippet length for better context
-    })
-    if len(history) > 15: # Keep 15 items in memory to avoid repetitive content
-        history.pop(0)
-    save_json(MEMORY_FILE, history)
-
-def get_past_topics_string():
-    history = load_json(MEMORY_FILE, [])
-    if not history:
-        return "None."
-    return "\n".join([f"- {h['snippet']}..." for h in history])
-
-# ================= AI GENERATION =================
-
-def generate_post(topic_category):
-    past_topics = get_past_topics_string()
-    
-    prompt = f"""
-    You are 'AKethioAI', the leading AI educator for the Ethiopian community on Telegram.
-    
-    Task: Write ONE high-quality viral Telegram post in Amharic.
-    Category: {topic_category}
-    
-    POST HISTORY (DO NOT REPEAT THESE TOPICS):
-    {past_topics}
-    
-    REQUIREMENTS:
-    1. Language: Amharic (Use English for technical names/tools).
-    2. Style: Engaging, informative, and professional.
-    3. Structure:
-       - 🎯 Catchy Title with Emojis
-       - 💡 The explanation/value
-       - 🚀 'How to start' section
-       - 📢 Call to action (Join @akethioai)
-    4. Constraint: Keep it under 180 words.
-    5. Output ONLY the post text.
-    """
-    
+# ================= MEMORY SYSTEM =================
+def load_memory():
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"❌ Gemini Error: {e}")
-        return None
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
 
-# ================= TELEGRAM =================
+def save_memory(memory):
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, ensure_ascii=False, indent=2)
 
+memory_posts = load_memory()
+
+def is_duplicate(text):
+    h = hashlib.md5(text.encode("utf-8")).hexdigest()
+    for item in memory_posts:
+        if item["hash"] == h:
+            return True
+    memory_posts.append({"hash": h, "time": str(datetime.now())})
+    save_memory(memory_posts)
+    return False
+
+# ================= YOUR MASTER PROMPT =================
+MASTER_PROMPT = """
+You are an expert AI content creator for an Ethiopian audience.
+
+Your task is to generate DAILY viral Telegram posts in Amharic for a channel called "AKethioAI".
+
+IMPORTANT RULES:
+1. Never repeat ideas, examples, tools, or wording from previous posts.
+2. Content must be simple, clear, and easy for beginners.
+3. Posts must feel viral, modern, and exciting.
+4. Use short paragraphs and emojis (but not too many).
+5. Focus on real AI use cases for Ethiopians.
+6. Avoid technical jargon.
+7. Each post must feel new, surprising, and useful.
+8. Use a strong hook at the beginning.
+
+Create 3 different posts:
+
+POST 1 — EDUCATION / TIP 🧠
+POST 2 — VIRAL / MONEY / TOOL 💰🤖
+POST 3 — AI NEWS 📰
+
+Tone:
+Friendly, confident, modern Ethiopian style.
+Write in natural Amharic.
+Emotionally engaging, slightly dramatic, curiosity-driven.
+
+Output only the 3 posts in Amharic.
+"""
+
+# ================= AI GENERATOR =================
+def generate_posts():
+    response = model.generate_content(MASTER_PROMPT)
+    return response.text.strip()
+
+# ================= TELEGRAM SENDER =================
 def send_to_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    # Simple formatting cleanup for Telegram Markdown
-    clean_text = text.replace("**", "*") 
-    
     data = {
-        "chat_id": CHANNEL_ID,
-        "text": clean_text,
-        "parse_mode": "Markdown" 
+        "chat_id": CHANNEL_USERNAME,
+        "text": text
     }
-    
-    try:
-        response = requests.post(url, data=data)
-        response_json = response.json()
-        
-        if not response_json.get("ok"):
-            print(f"⚠️ Telegram Error: {response_json}")
-            # Try without markdown if it fails
-            if "parse_mode" in data:
-                del data["parse_mode"]
-                requests.post(url, data=data)
-            
-        return True
-    except Exception as e:
-        print(f"❌ Connection Error: {e}")
-        return False
+    requests.post(url, data=data)
 
 # ================= MAIN LOOP =================
-
-print("🚀 AKethioAI Bot is now ONLINE and using Gemini 3...")
-
 while True:
     try:
-        current_index = get_next_topic_index()
-        current_topic = TOPICS[current_index]
-        
-        print(f"🤖 Preparing post for category: {current_topic}")
-        
-        post_content = generate_post(current_topic)
-        
-        if post_content:
-            print("📨 Sending to @akethioai...")
-            success = send_to_telegram(post_content)
-            
-            if success:
-                print("✅ Posted Successfully!")
-                record_post_history(post_content)
-                advance_topic_index()
-                
-                print(f"💤 Sleeping for {POST_INTERVAL/3600} hours...")
-                time.sleep(POST_INTERVAL)
-            else:
-                print("⚠️ Telegram failed. Retrying in 10 minutes...")
-                time.sleep(600) 
-        else:
-            print("⚠️ Gemini failed. Retrying in 2 minutes...")
-            time.sleep(120)
+        posts = generate_posts()
 
-    except KeyboardInterrupt:
-        print("\n🛑 Bot shut down.")
-        break
+        if not is_duplicate(posts):
+            send_to_telegram(posts)
+            print("✅ Posted successfully!")
+        else:
+            print("⚠️ Duplicate detected, regenerating...")
+
+        time.sleep(POST_INTERVAL)
+
     except Exception as e:
-        print(f"❌ Error in main loop: {e}")
+        print("❌ Error:", e)
         time.sleep(60)
